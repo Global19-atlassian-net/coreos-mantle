@@ -1,45 +1,68 @@
 #!/bin/bash -e
 #
-# Run all tests
+# Run all tests (not including functional)
 #   ./test
 #   ./test -v
 #
 # Run tests for one package
 #   PKG=./foo ./test
+#   PKG=bar ./test
 #
 
-# A replacement for `go fmt` that calls gofmt without -w
-gofmt-l() {
-    set -- $(go list "$@")
-    pushd "${GOPATH}/src" >/dev/null
-    c=$(gofmt -l "$@" | tee /dev/stderr | wc -c)
-    popd >/dev/null
-    if [[ $c -ne 0 ]]; then
-        echo "gofmt check failed" >&2
-        return 1
-    fi
-}
+# Invoke ./cover for HTML output
+COVER=${COVER:-"-cover"}
 
 source ./env
-# Use an alternate bin to avoid clobbering output from ./build
-export GOBIN="${GOPATH}/_testbin"
-# cd via the symlink so ./... and so on resolves correctly.
-cd gopath/src/${REPO_PATH}
 
-# PKG may be passed in from ./cover
-[[ -z "$PKG" ]] && PKG="./..."
+TESTABLE="auth cli index kola kola/register
+	lang lang/destructor lang/maps
+	network network/ntp network/omaha
+	platform platform/local
+	sdk sdk/omaha sdk/repo
+	system system/exec system/targen system/user
+	util
+	version"
+
+FORMATTABLE="$TESTABLE cmd/cork cmd/kola cmd/kolet cmd/ore cmd/plume"
+
+# user has not provided PKG override
+if [ -z "$PKG" ]; then
+	TEST=$TESTABLE
+	FMT=$FORMATTABLE
+
+# user has provided PKG override
+else
+	# strip out slashes and dots from PKG=./foo/
+	TEST=${PKG//\//}
+	TEST=${TEST//./}
+
+	# only run gofmt on packages provided by user
+	FMT="$TEST"
+fi
+
+# split TEST into an array and prepend REPO_PATH to each local package
+split=(${TEST// / })
+TEST=${split[@]/#/${REPO_PATH}/}
 
 echo "Building tests..."
-go test -i "$@" $PKG
-go install $PKG
+go test -i ${COVER} ${TEST}
 
 echo "Running tests..."
-go test -cover "$@" $PKG
+go test ${COVER} ${TEST}
 
 echo "Checking gofmt..."
-gofmt-l $PKG
+fmtRes=$(gofmt -l $FMT)
+if [ -n "${fmtRes}" ]; then
+	echo -e "gofmt checking failed:\n${fmtRes}"
+	exit 255
+fi
 
 echo "Checking govet..."
-go vet $PKG
+vetRes=$(go vet $TEST)
+if [ -n "${vetRes}" ]; then
+	echo -e "govet checking failed:\n${vetRes}"
+	exit 255
+fi
 
 echo "Success"
+

@@ -33,10 +33,6 @@ type QEMUOptions struct {
 	// DiskImage is the full path to the disk image to boot in QEMU.
 	DiskImage string
 	Board     string
-
-	// BIOSImage is name of the BIOS file to pass to QEMU.
-	// It can be a plain name, or a full path.
-	BIOSImage string
 }
 
 // QEMUCluster is a local cluster of QEMU-based virtual machines.
@@ -150,7 +146,7 @@ func (qc *QEMUCluster) NewMachine(cfg string) (Machine, error) {
 			"qemu-system-aarch64",
 			"-machine", "virt",
 			"-cpu", "cortex-a57",
-			"-bios", qc.conf.BIOSImage,
+			"-bios", "QEMU_EFI.fd",
 			"-smp", "1",
 			"-m", "1024",
 			"-uuid", qm.id,
@@ -166,7 +162,6 @@ func (qc *QEMUCluster) NewMachine(cfg string) (Machine, error) {
 			"qemu-system-x86_64",
 			"-machine", "accel=kvm",
 			"-cpu", "host",
-			"-bios", qc.conf.BIOSImage,
 			"-smp", "1",
 			"-m", "1024",
 			"-uuid", qm.id,

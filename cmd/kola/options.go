@@ -16,8 +16,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
-
 	"github.com/coreos/mantle/kola"
 	"github.com/coreos/mantle/sdk"
 )
@@ -28,11 +26,6 @@ var (
 	kolaDefaultImages  = map[string]string{
 		"amd64-usr": sdk.BuildRoot() + "/images/amd64-usr/latest/coreos_production_image.bin",
 		"arm64-usr": sdk.BuildRoot() + "/images/arm64-usr/latest/coreos_developer_image.bin",
-	}
-
-	kolaDefaultBIOS = map[string]string{
-		"amd64-usr": "bios.bin",
-		"arm64-usr": filepath.Join(sdk.BoardRoot(""), "/usr/share/edk2-armvirt/bios.bin"),
 	}
 )
 
@@ -46,7 +39,6 @@ func init() {
 
 	sv(&kola.QEMUOptions.Board, "board", defaultTargetBoard, "target board")
 	sv(&kola.QEMUOptions.DiskImage, "qemu-image", "", "path to CoreOS disk image")
-	sv(&kola.QEMUOptions.BIOSImage, "qemu-bios", "", "BIOS to use for QEMU vm")
 
 	// gce specific options
 	sv(&kola.GCEOptions.Image, "gce-image", "latest", "GCE image")
@@ -75,10 +67,6 @@ func syncOptions() error {
 
 	if kola.QEMUOptions.DiskImage == "" {
 		kola.QEMUOptions.DiskImage = image
-	}
-
-	if kola.QEMUOptions.BIOSImage == "" {
-		kola.QEMUOptions.BIOSImage = kolaDefaultBIOS[kola.QEMUOptions.Board]
 	}
 
 	return nil

@@ -29,14 +29,12 @@ func init() {
 		ClusterSize: 1,
 		Name:        "coreos.verity.verify",
 		Platforms:   []string{"qemu", "aws", "gce"},
-		UserData:    `#cloud-config`,
 	})
 	register.Register(&register.Test{
 		Run:         VerityCorruption,
 		ClusterSize: 1,
 		Name:        "coreos.verity.corruption",
 		Platforms:   []string{"qemu", "aws", "gce"},
-		UserData:    `#cloud-config`,
 	})
 }
 

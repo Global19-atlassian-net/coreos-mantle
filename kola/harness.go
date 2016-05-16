@@ -26,7 +26,6 @@ import (
 	"github.com/coreos/mantle/kola/register"
 	"github.com/coreos/mantle/platform"
 
-	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/go-semver/semver"
 	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/pkg/capnslog"
 
 	// Tests imported for registration side effects.
@@ -34,8 +33,7 @@ import (
 	_ "github.com/coreos/mantle/kola/tests/etcd"
 	_ "github.com/coreos/mantle/kola/tests/flannel"
 	_ "github.com/coreos/mantle/kola/tests/fleet"
-	_ "github.com/coreos/mantle/kola/tests/ignition/v1"
-	_ "github.com/coreos/mantle/kola/tests/ignition/v2"
+	_ "github.com/coreos/mantle/kola/tests/ignition"
 	_ "github.com/coreos/mantle/kola/tests/kubernetes"
 	_ "github.com/coreos/mantle/kola/tests/metadata"
 	_ "github.com/coreos/mantle/kola/tests/misc"
@@ -92,7 +90,7 @@ func testRunner(platform string, done <-chan struct{}, tests chan *register.Test
 	}
 }
 
-func filterTests(tests map[string]*register.Test, pattern, platform string, version semver.Version) (map[string]*register.Test, error) {
+func filterTests(tests map[string]*register.Test, pattern, platform string) (map[string]*register.Test, error) {
 	r := make(map[string]*register.Test)
 
 	for name, t := range tests {
@@ -106,11 +104,6 @@ func filterTests(tests map[string]*register.Test, pattern, platform string, vers
 
 		// Skip the test if Manual is set and the name doesn't fully match.
 		if t.Manual && t.Name != pattern {
-			continue
-		}
-
-		// Check the test's min and end versions when running more then one test
-		if t.Name != pattern && versionOutsideRange(version, t.MinVersion, t.EndVersion) {
 			continue
 		}
 
@@ -133,20 +126,6 @@ func filterTests(tests map[string]*register.Test, pattern, platform string, vers
 	return r, nil
 }
 
-// versionOutsideRange checks to see if version is outside [min, end). If end
-// is a zero value, it is ignored and there is no upper bound.
-func versionOutsideRange(version, minVersion, endVersion semver.Version) bool {
-	if version.LessThan(minVersion) {
-		return true
-	}
-
-	if (endVersion != semver.Version{}) && !version.LessThan(endVersion) {
-		return true
-	}
-
-	return false
-}
-
 // RunTests is a harness for running multiple tests in parallel. Filters
 // tests based on a glob pattern and by platform. Has access to all
 // tests either registered in this package or by imported packages that
@@ -155,38 +134,9 @@ func RunTests(pattern, pltfrm string) error {
 	var passed, failed, skipped int
 	var wg sync.WaitGroup
 
-	// Avoid incurring cost of starting machine in getClusterSemver when
-	// either:
-	// 1) we already know 0 tests will run
-	// 2) glob is an exact match which means minVersion will be ignored
-	//    either way
-	tests, err := filterTests(register.Tests, pattern, pltfrm, semver.Version{})
+	tests, err := filterTests(register.Tests, pattern, pltfrm)
 	if err != nil {
 		plog.Fatal(err)
-	}
-
-	var skipGetVersion bool
-	if len(tests) == 0 {
-		skipGetVersion = true
-	} else if len(tests) == 1 {
-		for name := range tests {
-			if name == pattern {
-				skipGetVersion = true
-			}
-		}
-	}
-
-	if !skipGetVersion {
-		version, err := getClusterSemver(pltfrm)
-		if err != nil {
-			plog.Fatal(err)
-		}
-
-		// one more filter pass now that we know real version
-		tests, err = filterTests(tests, pattern, pltfrm, *version)
-		if err != nil {
-			plog.Fatal(err)
-		}
 	}
 
 	done := make(chan struct{})
@@ -242,55 +192,9 @@ func RunTests(pattern, pltfrm string) error {
 	return nil
 }
 
-// getClusterSemVer returns the CoreOS semantic version via starting a
-// machine and checking
-func getClusterSemver(pltfrm string) (*semver.Version, error) {
-	var err error
-	var cluster platform.Cluster
-
-	switch pltfrm {
-	case "qemu":
-		cluster, err = platform.NewQemuCluster(QEMUOptions)
-	case "gce":
-		cluster, err = platform.NewGCECluster(GCEOptions)
-	case "aws":
-		cluster, err = platform.NewAWSCluster(AWSOptions)
-	default:
-		err = fmt.Errorf("invalid platform %q", pltfrm)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("creating cluster for semver check: %v", err)
-	}
-	defer func() {
-		if err := cluster.Destroy(); err != nil {
-			plog.Errorf("cluster.Destroy(): %v", err)
-		}
-	}()
-
-	m, err := cluster.NewMachine("#cloud-config")
-	if err != nil {
-		return nil, fmt.Errorf("creating new machine for semver check: %v", err)
-	}
-
-	out, err := m.SSH("grep ^VERSION_ID= /etc/os-release")
-	if err != nil {
-		return nil, fmt.Errorf("parsing /etc/os-release: %v", err)
-	}
-
-	version, err := semver.NewVersion(strings.Split(string(out), "=")[1])
-	if err != nil {
-		return nil, fmt.Errorf("parsing os-release semver: %v", err)
-	}
-
-	return version, nil
-}
-
 // RunTest is a harness for running a single test. It is used by
 // RunTests but can also be used directly by binaries that aim to run a
-// single test. Using RunTest directly means that TestCluster flags used
-// to filter out tests such as 'Platforms', 'Manual', or 'MinVersion'
-// are not respected.
+// single test.
 func RunTest(t *register.Test, pltfrm string) error {
 	var err error
 	var cluster platform.Cluster
@@ -351,12 +255,7 @@ func RunTest(t *register.Test, pltfrm string) error {
 
 	// drop kolet binary on machines
 	if t.NativeFuncs != nil {
-		nativeArch := "amd64"
-		if pltfrm == "qemu" && QEMUOptions.Board != "" {
-			nativeArch = strings.SplitN(QEMUOptions.Board, "-", 2)[0]
-		}
-
-		err = scpKolet(tcluster, nativeArch)
+		err = scpKolet(tcluster)
 		if err != nil {
 			return fmt.Errorf("dropping kolet binary: %v", err)
 		}
@@ -375,11 +274,12 @@ func RunTest(t *register.Test, pltfrm string) error {
 }
 
 // scpKolet searches for a kolet binary and copies it to the machine.
-func scpKolet(t platform.TestCluster, mArch string) error {
+func scpKolet(t platform.TestCluster) error {
+	// TODO: determine the GOARCH for the remote machine
+	mArch := "amd64"
 	for _, d := range []string{
 		".",
 		filepath.Dir(os.Args[0]),
-		filepath.Join(filepath.Dir(os.Args[0]), mArch),
 		filepath.Join("/usr/lib/kola", mArch),
 	} {
 		kolet := filepath.Join(d, "kolet")

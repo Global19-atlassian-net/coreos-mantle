@@ -17,8 +17,6 @@ package omaha
 import (
 	"net"
 	"net/http"
-
-	"github.com/coreos/mantle/network"
 )
 
 func NewServer(addr string, updater Updater) (*Server, error) {
@@ -57,10 +55,17 @@ type Server struct {
 
 func (s *Server) Serve() error {
 	err := s.srv.Serve(s.l)
-	if network.IsClosed(err) {
-		// gracefully quit
-		err = nil
+	if err != nil {
+		netErr, ok := err.(*net.OpError)
+		if ok {
+			if netErr.Err.Error() == "use of closed network connection" {
+				return nil
+			}
+		}
+
+		return err
 	}
+
 	return nil
 }
 

@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/pkg/capnslog"
-
-	"github.com/coreos/mantle/network"
 )
 
 var plog = capnslog.NewPackageLogger("github.com/coreos/mantle", "network/ntp")
@@ -123,10 +121,7 @@ func (s *Server) Serve() {
 
 	for {
 		req, err := s.Accept()
-		if network.IsClosed(err) {
-			// gracefully quit
-			return
-		} else if err != nil {
+		if err != nil {
 			plog.Errorf("NTP server failed: %v", err)
 			return
 		}

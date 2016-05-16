@@ -1,4 +1,4 @@
-// Copyright 2014 CoreOS, Inc.
+// Copyright 2015 CoreOS, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package config
 
-import (
-	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/spf13/cobra"
-	"github.com/coreos/mantle/cli"
-)
-
-var root = &cobra.Command{
-	Use:   "plume [command]",
-	Short: "The CoreOS release utility",
-}
-
-func main() {
-	cli.Execute(root)
+type Passwd struct {
+	Users  []User  `json:"users,omitempty"  yaml:"users"`
+	Groups []Group `json:"groups,omitempty" yaml:"groups"`
 }

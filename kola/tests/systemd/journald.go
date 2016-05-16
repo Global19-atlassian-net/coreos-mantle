@@ -24,7 +24,6 @@ import (
 	"github.com/coreos/mantle/util"
 
 	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/coreos-cloudinit/config"
-	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/go-semver/semver"
 	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/pkg/capnslog"
 )
 
@@ -46,37 +45,15 @@ var (
 
 func init() {
 	register.Register(&register.Test{
-		Run:         journalRemote225,
+		Run:         JournalRemote,
 		ClusterSize: 0,
-		Name:        "systemd.journal.remote.225",
-		UserData:    `#cloud-config`,
-		EndVersion:  semver.Version{Major: 1024},
+		Name:        "systemd.journal.remote",
 	})
-
-	register.Register(&register.Test{
-		Run:         journalRemote229,
-		ClusterSize: 0,
-		Name:        "systemd.journal.remote.229",
-		UserData:    `#cloud-config`,
-		MinVersion:  semver.Version{Major: 1024},
-	})
-}
-
-// systemd v225 includes the port in the journal file
-func journalRemote225(c platform.TestCluster) error {
-	format := "/var/log/journal/remote/remote-%s:19531.journal"
-	return journalRemote(c, format)
-}
-
-// systemd v229 has no port in the journal file
-func journalRemote229(c platform.TestCluster) error {
-	format := "/var/log/journal/remote/remote-%s.journal"
-	return journalRemote(c, format)
 }
 
 // JournalRemote tests that systemd-journal-remote can read log entries from
 // a systemd-journal-gatewayd server.
-func journalRemote(c platform.TestCluster, journalFmt string) error {
+func JournalRemote(c platform.TestCluster) error {
 	// start gatewayd and log a message
 	gateway, err := c.NewMachine(gatewayconf.String())
 	if err != nil {
@@ -92,7 +69,7 @@ func journalRemote(c platform.TestCluster, journalFmt string) error {
 	}
 
 	// spawn a machine to read from gatewayd
-	collector, err := c.NewMachine("#cloud-config")
+	collector, err := c.NewMachine("")
 	if err != nil {
 		return fmt.Errorf("Cluster.NewMachine: %s", err)
 	}
@@ -107,7 +84,7 @@ func journalRemote(c platform.TestCluster, journalFmt string) error {
 
 	// find the message on the collector
 	journalReader := func() error {
-		cmd = fmt.Sprintf("sudo journalctl _HOSTNAME=%s -t core --file "+journalFmt, gatewayconf.Hostname, gateway.PrivateIP())
+		cmd = fmt.Sprintf("sudo journalctl _HOSTNAME=%s -t core --file /var/log/journal/remote/remote-%s:19531.journal", gatewayconf.Hostname, gateway.PrivateIP())
 		out, err = collector.SSH(cmd)
 		if err != nil {
 			return fmt.Errorf("journalctl: %v: %v", out, err)

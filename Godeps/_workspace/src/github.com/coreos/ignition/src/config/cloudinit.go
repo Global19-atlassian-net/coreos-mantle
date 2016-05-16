@@ -1,4 +1,4 @@
-// Copyright 2014 CoreOS, Inc.
+// Copyright 2015 CoreOS, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+// These functions are copied from github.com/coreos/coreos-cloudinit/config.
+
+package config
 
 import (
-	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/spf13/cobra"
-	"github.com/coreos/mantle/cli"
+	"strings"
+	"unicode"
 )
 
-var root = &cobra.Command{
-	Use:   "plume [command]",
-	Short: "The CoreOS release utility",
+func isCloudConfig(userdata []byte) bool {
+	header := strings.SplitN(string(userdata), "\n", 2)[0]
+
+	// Trim trailing whitespaces
+	header = strings.TrimRightFunc(header, unicode.IsSpace)
+
+	return (header == "#cloud-config")
 }
 
-func main() {
-	cli.Execute(root)
+func isScript(userdata []byte) bool {
+	header := strings.SplitN(string(userdata), "\n", 2)[0]
+	return strings.HasPrefix(header, "#!")
 }
