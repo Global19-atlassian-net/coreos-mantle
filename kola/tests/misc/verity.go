@@ -29,12 +29,14 @@ func init() {
 		ClusterSize: 1,
 		Name:        "coreos.verity.verify",
 		Platforms:   []string{"qemu", "aws", "gce"},
+		UserData:    `#cloud-config`,
 	})
 	register.Register(&register.Test{
 		Run:         VerityCorruption,
 		ClusterSize: 1,
 		Name:        "coreos.verity.corruption",
 		Platforms:   []string{"qemu", "aws", "gce"},
+		UserData:    `#cloud-config`,
 	})
 }
 
@@ -92,7 +94,7 @@ func VerityCorruption(c platform.TestCluster) error {
 	out, err := m.SSH("sudo veritysetup status usr")
 	if err != nil && bytes.Equal(out, []byte("/dev/mapper/usr is inactive.")) {
 		// verity not in use, so skip.
-		return register.Skip
+		c.Skip("verity is not enabled")
 	} else if err != nil {
 		return fmt.Errorf("failed checking verity status: %s: %v", out, err)
 	}

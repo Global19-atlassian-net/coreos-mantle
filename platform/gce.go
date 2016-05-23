@@ -26,6 +26,7 @@ import (
 	"github.com/coreos/mantle/auth"
 
 	"github.com/coreos/mantle/Godeps/_workspace/src/golang.org/x/crypto/ssh"
+	"github.com/coreos/mantle/Godeps/_workspace/src/golang.org/x/crypto/ssh/agent"
 	"github.com/coreos/mantle/Godeps/_workspace/src/google.golang.org/api/compute/v1"
 )
 
@@ -35,9 +36,9 @@ type GCEOptions struct {
 	Zone        string
 	MachineType string
 	DiskType    string
-	BaseName    string
 	Network     string
 	ServiceAuth bool
+	*Options
 }
 
 type gceCluster struct {
@@ -70,7 +71,7 @@ func NewGCECluster(conf GCEOptions) (Cluster, error) {
 		return nil, err
 	}
 
-	bc, err := newBaseCluster()
+	bc, err := newBaseCluster(conf.BaseName)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +108,7 @@ func (gc *gceCluster) NewMachine(userdata string) (Machine, error) {
 	conf.CopyKeys(keys)
 
 	// Create gce VM and wait for creation to succeed.
-	gm, err := GCECreateVM(gc.api, gc.conf, conf.String())
+	gm, err := GCECreateVM(gc.api, gc.conf, conf.String(), keys)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +140,10 @@ func (gm *gceMachine) SSHClient() (*ssh.Client, error) {
 	return gm.gc.SSHClient(gm.IP())
 }
 
+func (gm *gceMachine) PasswordSSHClient(user string, password string) (*ssh.Client, error) {
+	return gm.gc.PasswordSSHClient(gm.IP(), user, password)
+}
+
 func (gm *gceMachine) SSH(cmd string) ([]byte, error) {
 	return gm.gc.SSH(gm, cmd)
 }
@@ -154,14 +159,14 @@ func (gm *gceMachine) Destroy() error {
 	return nil
 }
 
-func GCECreateVM(api *compute.Service, opts *GCEOptions, userdata string) (*gceMachine, error) {
+func GCECreateVM(api *compute.Service, opts *GCEOptions, userdata string, keys []*agent.Key) (*gceMachine, error) {
 	// generate name
 	name, err := newName(opts)
 	if err != nil {
 		return nil, fmt.Errorf("Failed allocating unique name for vm: %v\n", err)
 	}
 
-	instance, err := gceMakeInstance(opts, userdata, name)
+	instance, err := gceMakeInstance(opts, userdata, name, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -292,12 +297,27 @@ func GCEListImages(client *http.Client, proj, prefix string) ([]string, error) {
 }
 
 //Some code taken from: https://github.com/golang/build/blob/master/buildlet/gce.go
-func gceMakeInstance(opts *GCEOptions, userdata string, name string) (*compute.Instance, error) {
+func gceMakeInstance(opts *GCEOptions, userdata string, name string, keys []*agent.Key) (*compute.Instance, error) {
+	var metadataItems []*compute.MetadataItems
+	if len(keys) > 0 {
+		var sshKeys string
+		for i, key := range keys {
+			sshKeys += fmt.Sprintf("%d:%s\n", i, key)
+		}
+
+		metadataItems = append(metadataItems, &compute.MetadataItems{
+			Key:   "ssh-keys",
+			Value: &sshKeys,
+		})
+	}
+
 	prefix := "https://www.googleapis.com/compute/v1/projects/" + opts.Project
 	instance := &compute.Instance{
 		Name:        name,
 		MachineType: prefix + "/zones/" + opts.Zone + "/machineTypes/" + opts.MachineType,
-		Metadata:    &compute.Metadata{},
+		Metadata: &compute.Metadata{
+			Items: metadataItems,
+		},
 		Disks: []*compute.AttachedDisk{
 			{
 				AutoDelete: true,
