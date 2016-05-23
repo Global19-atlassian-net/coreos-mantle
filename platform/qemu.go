@@ -33,6 +33,12 @@ type QEMUOptions struct {
 	// DiskImage is the full path to the disk image to boot in QEMU.
 	DiskImage string
 	Board     string
+
+	// BIOSImage is name of the BIOS file to pass to QEMU.
+	// It can be a plain name, or a full path.
+	BIOSImage string
+
+	*Options
 }
 
 // QEMUCluster is a local cluster of QEMU-based virtual machines.
@@ -63,7 +69,7 @@ func NewQemuCluster(conf QEMUOptions) (Cluster, error) {
 		return nil, err
 	}
 
-	bc, err := newBaseCluster()
+	bc, err := newBaseCluster(conf.BaseName)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +152,7 @@ func (qc *QEMUCluster) NewMachine(cfg string) (Machine, error) {
 			"qemu-system-aarch64",
 			"-machine", "virt",
 			"-cpu", "cortex-a57",
-			"-bios", "QEMU_EFI.fd",
+			"-bios", qc.conf.BIOSImage,
 			"-smp", "1",
 			"-m", "1024",
 			"-uuid", qm.id,
@@ -162,6 +168,7 @@ func (qc *QEMUCluster) NewMachine(cfg string) (Machine, error) {
 			"qemu-system-x86_64",
 			"-machine", "accel=kvm",
 			"-cpu", "host",
+			"-bios", qc.conf.BIOSImage,
 			"-smp", "1",
 			"-m", "1024",
 			"-uuid", qm.id,
@@ -241,6 +248,15 @@ func (m *qemuMachine) SSHClient() (*ssh.Client, error) {
 	}
 
 	return sshClient, nil
+}
+
+func (m *qemuMachine) PasswordSSHClient(user string, password string) (*ssh.Client, error) {
+	client, err := m.qc.SSHAgent.NewPasswordClient(m.IP(), user, password)
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
 }
 
 func (m *qemuMachine) SSH(cmd string) ([]byte, error) {

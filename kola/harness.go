@@ -16,6 +16,7 @@ package kola
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,16 +25,20 @@ import (
 	"time"
 
 	"github.com/coreos/mantle/kola/register"
+	"github.com/coreos/mantle/kola/skip"
 	"github.com/coreos/mantle/platform"
 
+	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/go-semver/semver"
 	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/pkg/capnslog"
 
 	// Tests imported for registration side effects.
 	_ "github.com/coreos/mantle/kola/tests/coretest"
+	_ "github.com/coreos/mantle/kola/tests/docker"
 	_ "github.com/coreos/mantle/kola/tests/etcd"
 	_ "github.com/coreos/mantle/kola/tests/flannel"
 	_ "github.com/coreos/mantle/kola/tests/fleet"
-	_ "github.com/coreos/mantle/kola/tests/ignition"
+	_ "github.com/coreos/mantle/kola/tests/ignition/v1"
+	_ "github.com/coreos/mantle/kola/tests/ignition/v2"
 	_ "github.com/coreos/mantle/kola/tests/kubernetes"
 	_ "github.com/coreos/mantle/kola/tests/metadata"
 	_ "github.com/coreos/mantle/kola/tests/misc"
@@ -44,11 +49,13 @@ import (
 var (
 	plog = capnslog.NewPackageLogger("github.com/coreos/mantle", "kola")
 
-	QEMUOptions platform.QEMUOptions // glue to set platform options from main
-	GCEOptions  platform.GCEOptions  // glue to set platform options from main
-	AWSOptions  platform.AWSOptions  // glue to set platform options from main
+	Options     = platform.Options{}
+	QEMUOptions = platform.QEMUOptions{Options: &Options} // glue to set platform options from main
+	GCEOptions  = platform.GCEOptions{Options: &Options}  // glue to set platform options from main
+	AWSOptions  = platform.AWSOptions{Options: &Options}  // glue to set platform options from main
 
-	TestParallelism int //glue var to set test parallelism from main
+	TestParallelism int    //glue var to set test parallelism from main
+	TAPFile         string // if not "", write TAP results here
 
 	testOptions = make(map[string]string, 0)
 )
@@ -75,6 +82,37 @@ type result struct {
 	duration time.Duration
 }
 
+type resultSlice []*result
+
+// emit tap results.
+// https://testanything.org/tap-version-13-specification.html
+func (res resultSlice) ToTAP(w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "TAP version 13\n1..%d\n", len(res)); err != nil {
+		return err
+	}
+
+	var werr error
+
+	for i, r := range res {
+		t := r.test
+
+		switch err := r.result.(type) {
+		case nil:
+			_, werr = fmt.Fprintf(w, "ok %d - %s\n", i+1, t.Name)
+		case skip.Skip:
+			_, werr = fmt.Fprintf(w, "ok %d - %s # SKIP: %s\n", i+1, t.Name, err)
+		default:
+			_, werr = fmt.Fprintf(w, "not ok %d - %s # %s\n", i+1, t.Name, err)
+		}
+
+		if werr != nil {
+			return werr
+		}
+	}
+
+	return nil
+}
+
 func testRunner(platform string, done <-chan struct{}, tests chan *register.Test, results chan *result) {
 	for test := range tests {
 		plog.Noticef("=== RUN %s on %s", test.Name, platform)
@@ -90,7 +128,7 @@ func testRunner(platform string, done <-chan struct{}, tests chan *register.Test
 	}
 }
 
-func filterTests(tests map[string]*register.Test, pattern, platform string) (map[string]*register.Test, error) {
+func filterTests(tests map[string]*register.Test, pattern, platform string, version semver.Version) (map[string]*register.Test, error) {
 	r := make(map[string]*register.Test)
 
 	for name, t := range tests {
@@ -104,6 +142,11 @@ func filterTests(tests map[string]*register.Test, pattern, platform string) (map
 
 		// Skip the test if Manual is set and the name doesn't fully match.
 		if t.Manual && t.Name != pattern {
+			continue
+		}
+
+		// Check the test's min and end versions when running more then one test
+		if t.Name != pattern && versionOutsideRange(version, t.MinVersion, t.EndVersion) {
 			continue
 		}
 
@@ -126,6 +169,25 @@ func filterTests(tests map[string]*register.Test, pattern, platform string) (map
 	return r, nil
 }
 
+// versionOutsideRange checks to see if version is outside [min, end). If end
+// is a zero value, it is ignored and there is no upper bound. If version is a
+// zero value, the bounds are ignored.
+func versionOutsideRange(version, minVersion, endVersion semver.Version) bool {
+	if version == (semver.Version{}) {
+		return false
+	}
+
+	if version.LessThan(minVersion) {
+		return true
+	}
+
+	if (endVersion != semver.Version{}) && !version.LessThan(endVersion) {
+		return true
+	}
+
+	return false
+}
+
 // RunTests is a harness for running multiple tests in parallel. Filters
 // tests based on a glob pattern and by platform. Has access to all
 // tests either registered in this package or by imported packages that
@@ -133,10 +195,40 @@ func filterTests(tests map[string]*register.Test, pattern, platform string) (map
 func RunTests(pattern, pltfrm string) error {
 	var passed, failed, skipped int
 	var wg sync.WaitGroup
+	var results resultSlice
 
-	tests, err := filterTests(register.Tests, pattern, pltfrm)
+	// Avoid incurring cost of starting machine in getClusterSemver when
+	// either:
+	// 1) we already know 0 tests will run
+	// 2) glob is an exact match which means minVersion will be ignored
+	//    either way
+	tests, err := filterTests(register.Tests, pattern, pltfrm, semver.Version{})
 	if err != nil {
 		plog.Fatal(err)
+	}
+
+	var skipGetVersion bool
+	if len(tests) == 0 {
+		skipGetVersion = true
+	} else if len(tests) == 1 {
+		for name := range tests {
+			if name == pattern {
+				skipGetVersion = true
+			}
+		}
+	}
+
+	if !skipGetVersion {
+		version, err := getClusterSemver(pltfrm)
+		if err != nil {
+			plog.Fatal(err)
+		}
+
+		// one more filter pass now that we know real version
+		tests, err = filterTests(tests, pattern, pltfrm, *version)
+		if err != nil {
+			plog.Fatal(err)
+		}
 	}
 
 	done := make(chan struct{})
@@ -170,18 +262,33 @@ func RunTests(pattern, pltfrm string) error {
 
 	for r := range resc {
 		t := r.test
-		err := r.result
 		seconds := r.duration.Seconds()
-		if err != nil && err == register.Skip {
+		switch err := r.result.(type) {
+		case nil:
+			plog.Noticef("--- PASS: %s on %s (%.3fs)", t.Name, pltfrm, seconds)
+			passed++
+		case skip.Skip:
 			plog.Errorf("--- SKIP: %s on %s (%.3fs)", t.Name, pltfrm, seconds)
+			plog.Errorf("        %v", err)
 			skipped++
-		} else if err != nil {
+		default:
 			plog.Errorf("--- FAIL: %s on %s (%.3fs)", t.Name, pltfrm, seconds)
 			plog.Errorf("        %v", err)
 			failed++
+		}
+
+		results = append(results, r)
+	}
+
+	if TAPFile != "" {
+		f, err := os.Create(TAPFile)
+		if err != nil {
+			plog.Errorf("failed to create TAP file: %v", err)
 		} else {
-			plog.Noticef("--- PASS: %s on %s (%.3fs)", t.Name, pltfrm, seconds)
-			passed++
+			if err := results.ToTAP(f); err != nil {
+				plog.Errorf("failed write TAP results: %v", err)
+			}
+			f.Close()
 		}
 	}
 
@@ -192,11 +299,56 @@ func RunTests(pattern, pltfrm string) error {
 	return nil
 }
 
+// getClusterSemVer returns the CoreOS semantic version via starting a
+// machine and checking
+func getClusterSemver(pltfrm string) (*semver.Version, error) {
+	var err error
+	var cluster platform.Cluster
+
+	switch pltfrm {
+	case "qemu":
+		cluster, err = platform.NewQemuCluster(QEMUOptions)
+	case "gce":
+		cluster, err = platform.NewGCECluster(GCEOptions)
+	case "aws":
+		cluster, err = platform.NewAWSCluster(AWSOptions)
+	default:
+		err = fmt.Errorf("invalid platform %q", pltfrm)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("creating cluster for semver check: %v", err)
+	}
+	defer func() {
+		if err := cluster.Destroy(); err != nil {
+			plog.Errorf("cluster.Destroy(): %v", err)
+		}
+	}()
+
+	m, err := cluster.NewMachine("#cloud-config")
+	if err != nil {
+		return nil, fmt.Errorf("creating new machine for semver check: %v", err)
+	}
+
+	out, err := m.SSH("grep ^VERSION_ID= /etc/os-release")
+	if err != nil {
+		return nil, fmt.Errorf("parsing /etc/os-release: %v", err)
+	}
+
+	version, err := semver.NewVersion(strings.Split(string(out), "=")[1])
+	if err != nil {
+		return nil, fmt.Errorf("parsing os-release semver: %v", err)
+	}
+
+	return version, nil
+}
+
 // RunTest is a harness for running a single test. It is used by
 // RunTests but can also be used directly by binaries that aim to run a
-// single test.
-func RunTest(t *register.Test, pltfrm string) error {
-	var err error
+// single test. Using RunTest directly means that TestCluster flags used
+// to filter out tests such as 'Platforms', 'Manual', or 'MinVersion'
+// are not respected.
+func RunTest(t *register.Test, pltfrm string) (err error) {
 	var cluster platform.Cluster
 
 	switch pltfrm {
@@ -255,31 +407,45 @@ func RunTest(t *register.Test, pltfrm string) error {
 
 	// drop kolet binary on machines
 	if t.NativeFuncs != nil {
-		err = scpKolet(tcluster)
+		nativeArch := "amd64"
+		if pltfrm == "qemu" && QEMUOptions.Board != "" {
+			nativeArch = strings.SplitN(QEMUOptions.Board, "-", 2)[0]
+		}
+
+		err = scpKolet(tcluster, nativeArch)
 		if err != nil {
 			return fmt.Errorf("dropping kolet binary: %v", err)
 		}
 	}
 
+	defer func() {
+		r := recover()
+		switch r := r.(type) {
+		case nil:
+			// no-op
+		case error:
+			err = r
+		default:
+			err = fmt.Errorf("test panicked: %v", r)
+		}
+
+		// give some time for the remote journal to be flushed so it can be read
+		// before we run the deferred machine destruction
+		if err != nil {
+			time.Sleep(2 * time.Second)
+		}
+	}()
+
 	// run test
-	err = t.Run(tcluster)
-
-	// give some time for the remote journal to be flushed so it can be read
-	// before we run the deferred machine destruction
-	if err != nil {
-		time.Sleep(10 * time.Second)
-	}
-
-	return err
+	return t.Run(tcluster)
 }
 
 // scpKolet searches for a kolet binary and copies it to the machine.
-func scpKolet(t platform.TestCluster) error {
-	// TODO: determine the GOARCH for the remote machine
-	mArch := "amd64"
+func scpKolet(t platform.TestCluster, mArch string) error {
 	for _, d := range []string{
 		".",
 		filepath.Dir(os.Args[0]),
+		filepath.Join(filepath.Dir(os.Args[0]), mArch),
 		filepath.Join("/usr/lib/kola", mArch),
 	} {
 		kolet := filepath.Join(d, "kolet")
