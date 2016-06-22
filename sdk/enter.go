@@ -421,6 +421,10 @@ func copyUserConfig(chroot string) error {
 		return err
 	}
 
+	if err := copyUserConfigFile(".netrc", chroot); err != nil {
+		return err
+	}
+
 	return nil
 }
 

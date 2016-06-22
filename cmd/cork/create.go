@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	coreosManifestURL = "git@github.com:quantum/coreos-manifest.git"
+	coreosManifestURL = "https://github.com/quantum/coreos-manifest.git"
 )
 
 var (
