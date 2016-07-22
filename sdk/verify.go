@@ -20,7 +20,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/coreos/mantle/Godeps/_workspace/src/golang.org/x/crypto/openpgp"
+	"golang.org/x/crypto/openpgp"
 )
 
 // pub   2048R/5A50CE28 2015-12-17
