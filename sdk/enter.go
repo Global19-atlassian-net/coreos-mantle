@@ -417,6 +417,10 @@ func copyUserConfig(chroot string) error {
 		return err
 	}
 
+	if err := copyUserConfigFile(".ssh/id_dsa", chroot); err != nil {
+		return err
+	}
+
 	if err := copyUserConfigFile(".gitconfig", chroot); err != nil {
 		return err
 	}
