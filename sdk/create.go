@@ -32,7 +32,7 @@ import (
 // Must run inside the SDK chroot, easiest to just assemble a script to do it
 const (
 	safePath   = "PATH=/usr/sbin:/usr/bin:/sbin:/bin"
-	sudoPrompt = "--prompt=sudo password for %p: "
+	sudoPrompt = "-psudo password for %p: "
 	script     = `#!/bin/bash
 set -e
 
