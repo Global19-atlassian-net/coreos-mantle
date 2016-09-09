@@ -30,6 +30,7 @@ import (
 	"github.com/coreos/mantle/network/ntp"
 	"github.com/coreos/mantle/network/omaha"
 	"github.com/coreos/mantle/system/exec"
+	"github.com/coreos/mantle/system/ns"
 )
 
 type LocalCluster struct {
@@ -37,7 +38,6 @@ type LocalCluster struct {
 	Dnsmasq     *Dnsmasq
 	NTPServer   *ntp.Server
 	OmahaServer *omaha.Server
-	SSHAgent    *network.SSHAgent
 	SimpleEtcd  *SimpleEtcd
 	nshandle    netns.NsHandle
 }
@@ -46,22 +46,14 @@ func NewLocalCluster() (*LocalCluster, error) {
 	lc := &LocalCluster{}
 
 	var err error
-	lc.nshandle, err = NsCreate()
+	lc.nshandle, err = ns.Create()
 	if err != nil {
 		return nil, err
 	}
 	lc.AddCloser(&lc.nshandle)
 
-	dialer := NewNsDialer(lc.nshandle)
-	lc.SSHAgent, err = network.NewSSHAgent(dialer)
-	if err != nil {
-		lc.Destroy()
-		return nil, err
-	}
-	lc.AddCloser(lc.SSHAgent)
-
 	// dnsmasq and etcd much be launched in the new namespace
-	nsExit, err := NsEnter(lc.nshandle)
+	nsExit, err := ns.Enter(lc.nshandle)
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +93,7 @@ func NewLocalCluster() (*LocalCluster, error) {
 }
 
 func (lc *LocalCluster) NewCommand(name string, arg ...string) exec.Cmd {
-	cmd := NewNsCommand(lc.nshandle, name, arg...)
-	sshEnv := fmt.Sprintf("SSH_AUTH_SOCK=%s", lc.SSHAgent.Socket)
-	cmd.Env = append(cmd.Env, sshEnv)
+	cmd := ns.Command(lc.nshandle, name, arg...)
 	return cmd
 }
 
@@ -121,7 +111,7 @@ func (lc *LocalCluster) etcdEndpoint() string {
 func (lc *LocalCluster) GetDiscoveryURL(size int) (string, error) {
 	baseURL := fmt.Sprintf("%v/v2/keys/discovery/%v", lc.etcdEndpoint(), rand.Int())
 
-	nsDialer := NewNsDialer(lc.nshandle)
+	nsDialer := network.NewNsDialer(lc.nshandle)
 	tr := &http.Transport{
 		Dial: nsDialer.Dial,
 	}
@@ -144,7 +134,7 @@ func (lc *LocalCluster) GetDiscoveryURL(size int) (string, error) {
 }
 
 func (lc *LocalCluster) NewTap(bridge string) (*TunTap, error) {
-	nsExit, err := NsEnter(lc.nshandle)
+	nsExit, err := ns.Enter(lc.nshandle)
 	if err != nil {
 		return nil, err
 	}
@@ -171,4 +161,8 @@ func (lc *LocalCluster) NewTap(bridge string) (*TunTap, error) {
 	}
 
 	return tap, nil
+}
+
+func (lc *LocalCluster) GetNsHandle() netns.NsHandle {
+	return lc.nshandle
 }
