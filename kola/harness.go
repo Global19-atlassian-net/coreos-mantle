@@ -31,6 +31,11 @@ import (
 	"github.com/coreos/mantle/kola/register"
 	"github.com/coreos/mantle/kola/skip"
 	"github.com/coreos/mantle/platform"
+	awsapi "github.com/coreos/mantle/platform/api/aws"
+	gcloudapi "github.com/coreos/mantle/platform/api/gcloud"
+	"github.com/coreos/mantle/platform/machine/aws"
+	"github.com/coreos/mantle/platform/machine/gcloud"
+	"github.com/coreos/mantle/platform/machine/qemu"
 
 	// Tests imported for registration side effects.
 	_ "github.com/coreos/mantle/kola/tests/coretest"
@@ -41,6 +46,7 @@ import (
 	_ "github.com/coreos/mantle/kola/tests/ignition/v1"
 	_ "github.com/coreos/mantle/kola/tests/ignition/v2"
 	_ "github.com/coreos/mantle/kola/tests/kubernetes"
+	_ "github.com/coreos/mantle/kola/tests/locksmith"
 	_ "github.com/coreos/mantle/kola/tests/metadata"
 	_ "github.com/coreos/mantle/kola/tests/misc"
 	_ "github.com/coreos/mantle/kola/tests/rkt"
@@ -51,9 +57,9 @@ var (
 	plog = capnslog.NewPackageLogger("github.com/coreos/mantle", "kola")
 
 	Options     = platform.Options{}
-	QEMUOptions = platform.QEMUOptions{Options: &Options} // glue to set platform options from main
-	GCEOptions  = platform.GCEOptions{Options: &Options}  // glue to set platform options from main
-	AWSOptions  = platform.AWSOptions{Options: &Options}  // glue to set platform options from main
+	QEMUOptions = qemu.Options{Options: &Options}      // glue to set platform options from main
+	GCEOptions  = gcloudapi.Options{Options: &Options} // glue to set platform options from main
+	AWSOptions  = awsapi.Options{Options: &Options}    // glue to set platform options from main
 
 	TestParallelism int    //glue var to set test parallelism from main
 	TAPFile         string // if not "", write TAP results here
@@ -308,11 +314,11 @@ func getClusterSemver(pltfrm string) (*semver.Version, error) {
 
 	switch pltfrm {
 	case "qemu":
-		cluster, err = platform.NewQemuCluster(QEMUOptions)
+		cluster, err = qemu.NewCluster(&QEMUOptions)
 	case "gce":
-		cluster, err = platform.NewGCECluster(GCEOptions)
+		cluster, err = gcloud.NewCluster(&GCEOptions)
 	case "aws":
-		cluster, err = platform.NewAWSCluster(AWSOptions)
+		cluster, err = aws.NewCluster(&AWSOptions)
 	default:
 		err = fmt.Errorf("invalid platform %q", pltfrm)
 	}
@@ -354,11 +360,11 @@ func RunTest(t *register.Test, pltfrm string) (err error) {
 
 	switch pltfrm {
 	case "qemu":
-		c, err = platform.NewQemuCluster(QEMUOptions)
+		c, err = qemu.NewCluster(&QEMUOptions)
 	case "gce":
-		c, err = platform.NewGCECluster(GCEOptions)
+		c, err = gcloud.NewCluster(&GCEOptions)
 	case "aws":
-		c, err = platform.NewAWSCluster(AWSOptions)
+		c, err = aws.NewCluster(&AWSOptions)
 	default:
 		err = fmt.Errorf("invalid platform %q", pltfrm)
 	}
