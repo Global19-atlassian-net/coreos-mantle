@@ -12,21 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !go1.7
-
-package azure
+package util
 
 import (
-	"errors"
+	"compress/bzip2"
+	"io"
+	"os"
 )
 
-var noGo17 = errors.New("azure api only works with go 1.7 or higher")
-
-type API struct {
+// Bunzip2 does bunzip2 decompression from src to dst.
+//
+// It matches the signature of io.Copy.
+func Bunzip2(dst io.Writer, src io.Reader) (written int64, err error) {
+	bzr := bzip2.NewReader(src)
+	return io.Copy(dst, bzr)
 }
 
-// New creates a new Azure client. If no publish settings file is provided or
-// can't be parsed, an anonymous client is created.
-func New(opts *Options) (*API, error) {
-	return nil, noGo17
+// Bunzip2File does bunzip2 decompression from src file into dst file.
+func Bunzip2File(dst, src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+
+	_, err = Bunzip2(out, in)
+	return err
 }

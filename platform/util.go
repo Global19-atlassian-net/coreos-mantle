@@ -101,11 +101,11 @@ func StreamJournal(m Machine) error {
 	return nil
 }
 
-// Enable SELinux on a machine
+// Enable SELinux on a machine (skip on machines without SELinux support)
 func EnableSelinux(m Machine) error {
-	err, output := m.SSH("sudo setenforce 1")
+	_, err := m.SSH("if type -P setenforce; then sudo setenforce 1; fi")
 	if err != nil {
-		return fmt.Errorf("Unable to enable SELinux: %v: %s", err, output)
+		return fmt.Errorf("Unable to enable SELinux: %v", err)
 	}
 	return nil
 }
@@ -115,7 +115,11 @@ func EnableSelinux(m Machine) error {
 func Reboot(m Machine) error {
 	// stop sshd so that commonMachineChecks will only work if the machine
 	// actually rebooted
-	out, err := m.SSH("sudo systemctl stop sshd.socket; sudo systemd-run --no-block systemctl reboot")
+	out, err := m.SSH("sudo systemctl stop sshd.socket && sudo reboot")
+	if _, ok := err.(*ssh.ExitMissingError); ok {
+		// A terminated session is perfectly normal during reboot.
+		err = nil
+	}
 	if err != nil {
 		return fmt.Errorf("issuing reboot command failed: %v", out)
 	}
