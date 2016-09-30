@@ -12,14 +12,59 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build go1.7
-
 package azure
 
 import (
+	"encoding/xml"
+	"fmt"
+
+	"github.com/Azure/azure-sdk-for-go/management"
 	"github.com/Azure/azure-sdk-for-go/management/storageservice"
+)
+
+var (
+	azureImageURL = "services/images"
 )
 
 func (a *API) GetStorageServiceKeys(account string) (storageservice.GetStorageServiceKeysResponse, error) {
 	return storageservice.NewClient(a.client).GetStorageServiceKeys(account)
+}
+
+// https://msdn.microsoft.com/en-us/library/azure/jj157192.aspx
+func (a *API) AddOSImage(md *OSImage) error {
+	data, err := xml.Marshal(md)
+	if err != nil {
+		return err
+	}
+
+	op, err := a.client.SendAzurePostRequest(azureImageURL, data)
+	if err != nil {
+		return err
+	}
+
+	return a.client.WaitForOperation(op, nil)
+}
+
+func (a *API) OSImageExists(name string) (bool, error) {
+	url := fmt.Sprintf("%s/%s", azureImageURL, name)
+	response, err := a.client.SendAzureGetRequest(url)
+	if err != nil {
+		if management.IsResourceNotFoundError(err) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	var image OSImage
+
+	if err := xml.Unmarshal(response, &image); err != nil {
+		return false, err
+	}
+
+	if image.Name == name {
+		return true, nil
+	}
+
+	return false, nil
 }

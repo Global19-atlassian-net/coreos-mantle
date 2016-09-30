@@ -1,4 +1,4 @@
-// Copyright 2014 CoreOS, Inc.
+// Copyright 2016 CoreOS, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The package github.com/Azure/azure-sdk-for-go needs go 1.7 for TLS
-// renegotiation, so only link in the ore subcommands if we build with go 1.7.
-
-package main
+package azure
 
 import (
-	"github.com/coreos/mantle/cmd/ore/azure"
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
+
+var (
+	cmdUnreplicateImage = &cobra.Command{
+		Use:   "unreplicate-image image",
+		Short: "Unreplicate an OS image in Azure",
+		RunE:  runUnreplicateImage,
+	}
 )
 
 func init() {
-	root.AddCommand(azure.Azure)
+	Azure.AddCommand(cmdUnreplicateImage)
+}
+
+func runUnreplicateImage(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("expecting 1 argument")
+	}
+
+	return api.UnreplicateImage(args[0])
 }
