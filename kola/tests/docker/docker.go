@@ -15,15 +15,20 @@
 package docker
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/coreos/pkg/capnslog"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/context"
 
 	"github.com/coreos/mantle/kola/cluster"
 	"github.com/coreos/mantle/kola/register"
+	"github.com/coreos/mantle/kola/skip"
 	"github.com/coreos/mantle/lang/worker"
 	"github.com/coreos/mantle/system/exec"
 	"github.com/coreos/mantle/system/targen"
@@ -47,6 +52,31 @@ func init() {
 		// began shipping docker 1.10 in 949, which has all of the
 		// tested resource options.
 		MinVersion: semver.Version{Major: 949},
+	})
+	register.Register(&register.Test{
+		Run:         dockerNetwork,
+		ClusterSize: 2,
+		NativeFuncs: map[string]func() error{
+			"ncatcontainer": func() error {
+				return genDockerContainer("ncat", []string{"ncat"})
+			},
+		},
+		Name:     "docker.network",
+		UserData: `#cloud-config`,
+
+		MinVersion: semver.Version{Major: 1192},
+	})
+	register.Register(&register.Test{
+		Run:         dockerOldClient,
+		ClusterSize: 1,
+		NativeFuncs: map[string]func() error{
+			"echocontainer": func() error {
+				return genDockerContainer("echo", []string{"echo"})
+			},
+		},
+		Name:       "docker.oldclient",
+		UserData:   `#cloud-config`,
+		MinVersion: semver.Version{Major: 1192},
 	})
 }
 
@@ -149,4 +179,103 @@ func dockerResources(c cluster.TestCluster) error {
 	}
 
 	return wg.Wait()
+}
+
+// Ensure that docker containers can make network connections outside of the host
+func dockerNetwork(c cluster.TestCluster) error {
+	machines := c.Machines()
+	src, dest := machines[0], machines[1]
+
+	plog.Debug("creating ncat containers")
+
+	if err := c.RunNative("ncatcontainer", src); err != nil {
+		return fmt.Errorf("failed to create ncat container on src: %v", err)
+	}
+
+	if err := c.RunNative("ncatcontainer", dest); err != nil {
+		return fmt.Errorf("failed to create ncat container on dest: %v", err)
+	}
+
+	listener := func(c context.Context) error {
+		// Will block until a message is recieved
+		out, err := dest.SSH(
+			`echo "HELLO FROM SERVER" | docker run -i -p 9988:9988 ncat ncat --idle-timeout 20 --listen 0.0.0.0 9988`,
+		)
+		if err != nil {
+			return err
+		}
+
+		if !bytes.Equal(out, []byte("HELLO FROM CLIENT")) {
+			return fmt.Errorf("unexpected result from listener: %q", out)
+		}
+
+		return nil
+	}
+
+	talker := func(c context.Context) error {
+		// Wait until listener is ready before trying anything
+		for {
+			_, err := dest.SSH("sudo lsof -i TCP:9988 -s TCP:LISTEN | grep 9988 -q")
+			if err == nil {
+				break // socket is ready
+			}
+
+			exit, ok := err.(*ssh.ExitError)
+			if !ok || exit.Waitmsg.ExitStatus() != 1 { // 1 is the expected exit of grep -q
+				return err
+			}
+
+			plog.Debug("waiting for server to be ready")
+			select {
+			case <-c.Done():
+				return fmt.Errorf("timeout waiting for server")
+			default:
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+
+		srcCmd := fmt.Sprintf(`echo "HELLO FROM CLIENT" | docker run -i ncat ncat %s 9988`, dest.PrivateIP())
+		out, err := src.SSH(srcCmd)
+		if err != nil {
+			return err
+		}
+
+		if !bytes.Equal(out, []byte("HELLO FROM SERVER")) {
+			return fmt.Errorf(`unexpected result from listener: "%v"`, out)
+		}
+
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	return worker.Parallel(ctx, listener, talker)
+}
+
+// Regression test for https://github.com/coreos/bugs/issues/1569 and
+// https://github.com/coreos/docker/pull/31
+func dockerOldClient(c cluster.TestCluster) error {
+	oldclient := "/usr/lib/kola/amd64/docker-1.9.1"
+	if _, err := os.Stat(oldclient); err != nil {
+		return skip.Skip(fmt.Sprintf("Can't find old docker client to test: %v", err))
+	}
+	c.DropFile(oldclient)
+
+	m := c.Machines()[0]
+
+	if err := c.RunNative("echocontainer", m); err != nil {
+		return fmt.Errorf("failed to create echo container: %v", err)
+	}
+
+	output, err := m.SSH("/home/core/docker-1.9.1 run echo echo 'IT WORKED'")
+	if err != nil {
+		return fmt.Errorf("failed to run old docker client: %q status: %q", output, err)
+	}
+
+	if !bytes.Equal(output, []byte("IT WORKED")) {
+		return fmt.Errorf("unexpected result from docker client: %q", output)
+	}
+
+	return nil
 }

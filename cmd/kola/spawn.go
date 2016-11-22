@@ -36,31 +36,46 @@ var (
 		Short:  "spawn a CoreOS instance",
 	}
 
-	spawnUserData string
-	spawnShell    bool
-	spawnRemove   bool
+	spawnNodeCount      int
+	spawnProcessConfigs bool
+	spawnUserData       string
+	spawnShell          bool
+	spawnRemove         bool
+	spawnVerbose        bool
 )
 
 func init() {
-	cmdSpawn.Flags().StringVarP(&spawnUserData, "userdata", "u", "", "userdata to pass to the instance")
-	cmdSpawn.Flags().BoolVarP(&spawnShell, "shell", "s", false, "spawn a shell in the instance before exiting")
-	cmdSpawn.Flags().BoolVarP(&spawnRemove, "remove", "r", true, "remove instance after shell exits")
+	cmdSpawn.Flags().IntVarP(&spawnNodeCount, "nodecount", "c", 1, "number of nodes to spawn")
+	cmdSpawn.Flags().StringVarP(&spawnUserData, "userdata", "u", "", "userdata to pass to the instances")
+	cmdSpawn.Flags().BoolVarP(&spawnShell, "shell", "s", false, "spawn a shell in an instance before exiting")
+	cmdSpawn.Flags().BoolVarP(&spawnRemove, "remove", "r", true, "remove instances after shell exits")
+	cmdSpawn.Flags().BoolVarP(&spawnVerbose, "verbose", "v", false, "output information about spawned instances")
+	cmdSpawn.Flags().BoolVarP(&spawnProcessConfigs, "process-configs", "p", false, "process user-data as in standard test harnesses")
 	root.AddCommand(cmdSpawn)
 }
 
 func runSpawn(cmd *cobra.Command, args []string) {
-	var userdata []byte
+	var userdata string
 	var err error
 	var cluster platform.Cluster
 
+	if spawnNodeCount <= 0 {
+		die("Cluster Failed: nodecount must be one or more")
+	}
+
+	if spawnProcessConfigs && spawnUserData == "" {
+		die("no userdata provided to process: -p is only meaningful with -u")
+	}
+
 	if spawnUserData != "" {
-		userdata, err = ioutil.ReadFile(spawnUserData)
+		userbytes, err := ioutil.ReadFile(spawnUserData)
 		if err != nil {
 			die("Reading userdata failed: %v", err)
 		}
+		userdata = string(userbytes)
 	} else {
 		// ensure a key is injected
-		userdata = []byte("#cloud-config")
+		userdata = "#cloud-config"
 	}
 
 	switch kolaPlatform {
@@ -78,17 +93,39 @@ func runSpawn(cmd *cobra.Command, args []string) {
 		die("Cluster failed: %v", err)
 	}
 
-	mach, err := cluster.NewMachine(string(userdata))
-	if err != nil {
-		die("Spawning instance failed: %v", err)
+	var cfgs []string
+	if spawnProcessConfigs {
+		url, err := cluster.GetDiscoveryURL(spawnNodeCount)
+		if err != nil {
+			die("Failed to create discovery endpoint: %v", err)
+		}
+		cfgs = kola.MakeConfigs(url, userdata, spawnNodeCount)
+	} else {
+		for i := 0; i < spawnNodeCount; i++ {
+			cfgs = append(cfgs, userdata)
+		}
 	}
 
-	if spawnRemove {
-		defer mach.Destroy()
+	var someMach platform.Machine
+	for i := 0; i < spawnNodeCount; i++ {
+		mach, err := cluster.NewMachine(cfgs[i])
+		if err != nil {
+			die("Spawning instance failed: %v", err)
+		}
+
+		if spawnVerbose {
+			fmt.Printf("Machine spawned at %v\n", mach.IP())
+		}
+
+		if spawnRemove {
+			defer mach.Destroy()
+		}
+
+		someMach = mach
 	}
 
 	if spawnShell {
-		if err := platform.Manhole(mach); err != nil {
+		if err := platform.Manhole(someMach); err != nil {
 			die("Manhole failed: %v", err)
 		}
 	}
