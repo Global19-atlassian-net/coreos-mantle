@@ -53,11 +53,11 @@ func init() {
 func sugidFiles(m platform.Machine, validfiles []string, mode string) error {
 	badfiles := make([]string, 0, 0)
 
-	command := fmt.Sprintf("sudo find / -path /sys -prune -o -path /proc -prune -o -type f -perm -%v -print", mode)
+	command := fmt.Sprintf("sudo find / -path /sys -prune -o -path /proc -prune -o -path /var/lib/rkt -prune -o -type f -perm -%v -print", mode)
 
 	output, err := m.SSH(command)
 	if err != nil {
-		return fmt.Errorf("Failed to run find: output %v, status: %v", output, err)
+		return fmt.Errorf("Failed to run find: output %s, status: %v", output, err)
 	}
 
 	if string(output) == "" {
@@ -124,9 +124,9 @@ func SGIDFiles(c cluster.TestCluster) error {
 func WritableFiles(c cluster.TestCluster) error {
 	m := c.Machines()[0]
 
-	output, err := m.SSH("sudo find / -regextype posix-extended -regex \"/(sys|proc)\" -prune -o -type f -perm -0002 -print")
+	output, err := m.SSH("sudo find / -path /sys -prune -o -path /proc -prune -o -path /var/lib/rkt -prune -o -type f -perm -0002 -print")
 	if err != nil {
-		return fmt.Errorf("Failed to run find: output %v, status: %v", output, err)
+		return fmt.Errorf("Failed to run find: output %s, status: %v", output, err)
 	}
 
 	if string(output) != "" {
@@ -139,9 +139,9 @@ func WritableFiles(c cluster.TestCluster) error {
 func WritableDirs(c cluster.TestCluster) error {
 	m := c.Machines()[0]
 
-	output, err := m.SSH("sudo find / -regextype posix-extended -regex \"/(sys|proc)\" -prune -o -type d -perm -0002 -a ! -perm -1000 -print")
+	output, err := m.SSH("sudo find / -path /sys -prune -o -path /proc -prune -o -path /var/lib/rkt -prune -o -type d -perm -0002 -a ! -perm -1000 -print")
 	if err != nil {
-		return fmt.Errorf("Failed to run find: output %v, status: %v", output, err)
+		return fmt.Errorf("Failed to run find: output %s, status: %v", output, err)
 	}
 
 	if string(output) != "" {
