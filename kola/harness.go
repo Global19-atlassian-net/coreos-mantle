@@ -36,21 +36,6 @@ import (
 	"github.com/coreos/mantle/platform/machine/aws"
 	"github.com/coreos/mantle/platform/machine/gcloud"
 	"github.com/coreos/mantle/platform/machine/qemu"
-
-	// Tests imported for registration side effects.
-	_ "github.com/coreos/mantle/kola/tests/coretest"
-	_ "github.com/coreos/mantle/kola/tests/docker"
-	_ "github.com/coreos/mantle/kola/tests/etcd"
-	_ "github.com/coreos/mantle/kola/tests/flannel"
-	_ "github.com/coreos/mantle/kola/tests/fleet"
-	_ "github.com/coreos/mantle/kola/tests/ignition/v1"
-	_ "github.com/coreos/mantle/kola/tests/ignition/v2"
-	_ "github.com/coreos/mantle/kola/tests/kubernetes"
-	_ "github.com/coreos/mantle/kola/tests/locksmith"
-	_ "github.com/coreos/mantle/kola/tests/metadata"
-	_ "github.com/coreos/mantle/kola/tests/misc"
-	_ "github.com/coreos/mantle/kola/tests/rkt"
-	_ "github.com/coreos/mantle/kola/tests/systemd"
 )
 
 var (
@@ -120,11 +105,11 @@ func (res resultSlice) ToTAP(w io.Writer) error {
 	return nil
 }
 
-func testRunner(platform string, done <-chan struct{}, tests chan *register.Test, results chan *result) {
+func testRunner(platform, outputDir string, done <-chan struct{}, tests chan *register.Test, results chan *result) {
 	for test := range tests {
 		plog.Noticef("=== RUN %s on %s", test.Name, platform)
 		start := time.Now()
-		err := RunTest(test, platform)
+		err := RunTest(test, platform, outputDir)
 		duration := time.Since(start)
 
 		select {
@@ -199,10 +184,17 @@ func versionOutsideRange(version, minVersion, endVersion semver.Version) bool {
 // tests based on a glob pattern and by platform. Has access to all
 // tests either registered in this package or by imported packages that
 // register tests in their init() function.
-func RunTests(pattern, pltfrm string) error {
+// outputDir is where various test logs and data will be written for
+// analysis after the test run. If it already exists it will be erased!
+func RunTests(pattern, pltfrm, outputDir string) error {
 	var passed, failed, skipped int
 	var wg sync.WaitGroup
 	var results resultSlice
+
+	outputDir, err := CleanOutputDir(outputDir)
+	if err != nil {
+		return err
+	}
 
 	// Avoid incurring cost of starting machine in getClusterSemver when
 	// either:
@@ -226,7 +218,7 @@ func RunTests(pattern, pltfrm string) error {
 	}
 
 	if !skipGetVersion {
-		version, err := getClusterSemver(pltfrm)
+		version, err := getClusterSemver(pltfrm, outputDir)
 		if err != nil {
 			plog.Fatal(err)
 		}
@@ -247,7 +239,7 @@ func RunTests(pattern, pltfrm string) error {
 
 	for i := 0; i < TestParallelism; i++ {
 		go func() {
-			testRunner(pltfrm, done, testc, resc)
+			testRunner(pltfrm, outputDir, done, testc, resc)
 			wg.Done()
 		}()
 	}
@@ -308,13 +300,18 @@ func RunTests(pattern, pltfrm string) error {
 
 // getClusterSemVer returns the CoreOS semantic version via starting a
 // machine and checking
-func getClusterSemver(pltfrm string) (*semver.Version, error) {
+func getClusterSemver(pltfrm, outputDir string) (*semver.Version, error) {
 	var err error
 	var cluster platform.Cluster
 
+	testDir := filepath.Join(outputDir, "get_cluster_semver")
+	if err := os.MkdirAll(testDir, 0777); err != nil {
+		return nil, err
+	}
+
 	switch pltfrm {
 	case "qemu":
-		cluster, err = qemu.NewCluster(&QEMUOptions)
+		cluster, err = qemu.NewCluster(&QEMUOptions, testDir)
 	case "gce":
 		cluster, err = gcloud.NewCluster(&GCEOptions)
 	case "aws":
@@ -355,12 +352,19 @@ func getClusterSemver(pltfrm string) (*semver.Version, error) {
 // single test. Using RunTest directly means that TestCluster flags used
 // to filter out tests such as 'Platforms', 'Manual', or 'MinVersion'
 // are not respected.
-func RunTest(t *register.Test, pltfrm string) (err error) {
+// outputDir is where various test logs and data will be written for
+// analysis after the test run. It should already exist.
+func RunTest(t *register.Test, pltfrm, outputDir string) (err error) {
 	var c platform.Cluster
+
+	testDir := filepath.Join(outputDir, t.Name)
+	if err := os.MkdirAll(testDir, 0777); err != nil {
+		return err
+	}
 
 	switch pltfrm {
 	case "qemu":
-		c, err = qemu.NewCluster(&QEMUOptions)
+		c, err = qemu.NewCluster(&QEMUOptions, testDir)
 	case "gce":
 		c, err = gcloud.NewCluster(&GCEOptions)
 	case "aws":
@@ -473,4 +477,19 @@ func MakeConfigs(url, cfg string, csize int) []string {
 		cfgs = append(cfgs, strings.Replace(cfg, "$name", "instance"+strconv.Itoa(i), -1))
 	}
 	return cfgs
+}
+
+// CleanOutputDir creates an empty directory, any existing data will be wiped!
+func CleanOutputDir(outputDir string) (string, error) {
+	outputDir = filepath.Clean(outputDir)
+	if outputDir == "." {
+		return "", fmt.Errorf("kola: missing output directory path")
+	}
+	if err := os.RemoveAll(outputDir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(outputDir, 0777); err != nil {
+		return "", err
+	}
+	return outputDir, nil
 }

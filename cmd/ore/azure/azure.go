@@ -18,6 +18,8 @@ import (
 	"github.com/coreos/pkg/capnslog"
 	"github.com/spf13/cobra"
 
+	"github.com/coreos/mantle/auth"
+	"github.com/coreos/mantle/cli"
 	"github.com/coreos/mantle/platform/api/azure"
 )
 
@@ -25,28 +27,42 @@ var (
 	plog = capnslog.NewPackageLogger("github.com/coreos/mantle", "ore/azure")
 
 	Azure = &cobra.Command{
-		Use:              "azure [command]",
-		Short:            "azure image and vm utilities",
-		PersistentPreRun: preauth,
+		Use:   "azure [command]",
+		Short: "azure image and vm utilities",
 	}
 
-	opts = azure.Options{}
+	azureProfile      string
+	azureSubscription string
 
 	api *azure.API
 )
 
 func init() {
-	sv := Azure.PersistentFlags().StringVar
+	cli.WrapPreRun(Azure, preauth)
 
-	sv(&opts.PublishSettingsFile, "publish-settings", "", "publish settings file")
+	sv := Azure.PersistentFlags().StringVar
+	sv(&azureProfile, "azure-profile", "", "Azure Profile json file")
+	sv(&azureSubscription, "azure-subscription", "", "Azure subscription name. If unset, the first is used.")
 }
 
-func preauth(cmd *cobra.Command, args []string) {
+func preauth(cmd *cobra.Command, args []string) error {
 	plog.Printf("Creating Azure API...")
-	a, err := azure.New(&opts)
+
+	prof, err := auth.ReadAzureProfile(azureProfile)
+	if err != nil {
+		plog.Fatalf("Failed to read Azure Profile %q: %v", azureProfile, err)
+	}
+
+	opt := prof.SubscriptionOptions(azureSubscription)
+	if opt == nil {
+		plog.Fatalf("Azure subscription named %q doesn't exist in %q", azureSubscription, azureProfile)
+	}
+
+	a, err := azure.New(opt)
 	if err != nil {
 		plog.Fatalf("Failed to create Azure API: %v", err)
 	}
 
 	api = a
+	return nil
 }

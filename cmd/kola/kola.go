@@ -26,6 +26,9 @@ import (
 	"github.com/coreos/mantle/cli"
 	"github.com/coreos/mantle/kola"
 	"github.com/coreos/mantle/kola/register"
+
+	// register OS test suite
+	_ "github.com/coreos/mantle/kola/registry"
 )
 
 var (
@@ -81,7 +84,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		pattern = "*" // run all tests by default
 	}
 
-	err := kola.RunTests(pattern, kolaPlatform)
+	err := kola.RunTests(pattern, kolaPlatform, outputDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
