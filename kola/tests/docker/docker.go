@@ -26,11 +26,13 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/context"
 
+	"github.com/coreos/mantle/kola"
 	"github.com/coreos/mantle/kola/cluster"
 	"github.com/coreos/mantle/kola/register"
 	"github.com/coreos/mantle/kola/skip"
 	"github.com/coreos/mantle/lang/worker"
 	"github.com/coreos/mantle/platform"
+	"github.com/coreos/mantle/platform/machine/qemu"
 )
 
 var (
@@ -93,18 +95,32 @@ func init() {
 			  - name: dockremap
 			    create: {}
 		*/
-		Platforms:  []string{"aws", "gce"},
+		Platforms:  []string{"qemu", "gce"}, // aws: https://github.com/coreos/bugs/issues/1826
 		UserData:   `{"ignition":{"version":"2.0.0","config":{}},"storage":{"files":[{"filesystem":"root","path":"/etc/subuid","contents":{"source":"data:,dockremap%3A100000%3A65536","verification":{}},"user":{},"group":{}},{"filesystem":"root","path":"/etc/subgid","contents":{"source":"data:,dockremap%3A100000%3A65536","verification":{}},"user":{},"group":{}}]},"systemd":{"units":[{"name":"docker.service","enable":true,"dropins":[{"name":"10-uesrns.conf","contents":"[Service]\nEnvironment=DOCKER_OPTS=--userns-remap=dockremap"}]}]},"networkd":{},"passwd":{"users":[{"name":"dockremap","create":{}}]}}`,
 		MinVersion: semver.Version{Major: 1192},
+	})
+	register.Register(&register.Test{
+		Run:         dockerNetworksReliably,
+		ClusterSize: 1,
+		Name:        "docker.networks-reliably",
+		UserData:    `#cloud-config`,
+		MinVersion:  semver.Version{Major: 1192},
+	})
+	register.Register(&register.Test{
+		Run:         dockerUserNoCaps,
+		ClusterSize: 1,
+		Name:        "docker.user-no-caps",
+		UserData:    `#cloud-config`,
+		MinVersion:  semver.Version{Major: 1192},
 	})
 }
 
 // make a docker container out of binaries on the host
 func genDockerContainer(m platform.Machine, name string, binnames []string) error {
 	cmd := `tmpdir=$(mktemp -d); cd $tmpdir; echo -e "FROM scratch\nCOPY . /" > Dockerfile;
-	        b=$(which %s); libs=$(ldd $b | grep -o /lib'[^ ]*' | sort -u);
-	        rsync -av --relative --copy-links $b $libs ./;
-	        docker build -t %s .`
+	        b=$(which %s); libs=$(sudo ldd $b | grep -o /lib'[^ ]*' | sort -u);
+	        sudo rsync -av --relative --copy-links $b $libs ./;
+	        sudo docker build -t %s .`
 
 	if output, err := m.SSH(fmt.Sprintf(cmd, strings.Join(binnames, " "), name)); err != nil {
 		return fmt.Errorf("failed to make %s container: output: %q status: %q", name, output, err)
@@ -254,6 +270,10 @@ func dockerNetwork(c cluster.TestCluster) error {
 // Regression test for https://github.com/coreos/bugs/issues/1569 and
 // https://github.com/coreos/docker/pull/31
 func dockerOldClient(c cluster.TestCluster) error {
+	if _, ok := c.Cluster.(*qemu.Cluster); ok && kola.QEMUOptions.Board != "amd64-usr" {
+		return skip.Skip("Only applicable to amd64")
+	}
+
 	oldclient := "/usr/lib/kola/amd64/docker-1.9.1"
 	if _, err := os.Stat(oldclient); err != nil {
 		return skip.Skip(fmt.Sprintf("Can't find old docker client to test: %v", err))
@@ -317,6 +337,67 @@ func dockerUserns(c cluster.TestCluster) error {
 	}
 	if mapParts[0] != "0" && mapParts[1] != "100000" {
 		return fmt.Errorf("unexpected userns mapping values: %v", string(uid_map))
+	}
+
+	return nil
+}
+
+// Regression test for https://github.com/coreos/bugs/issues/1785
+// Also, hopefully will catch any similar issues
+func dockerNetworksReliably(c cluster.TestCluster) error {
+	m := c.Machines()[0]
+
+	if err := genDockerContainer(m, "ping", []string{"sh", "ping"}); err != nil {
+		return err
+	}
+
+	output, err := m.SSH(`seq 1 100 | xargs -i -n 1 -P 20 docker run ping sh -c 'out=$(ping -c 1 172.17.0.1 -w 1); if [[ "$?" != 0 ]]; then echo "{} FAIL"; echo "$out"; exit 1; else echo "{} PASS"; fi'`)
+	if err != nil {
+		return fmt.Errorf("could not run 100 containers pinging the bridge: %v: %q", err, string(output))
+	}
+
+	return nil
+}
+
+// Regression test for CVE-2016-8867
+// CVE-2016-8867 gave a container capabilities, including fowner, even if it
+// was a non-root user.
+// We test that a user inside a container does not have any effective nor
+// permitted capabilities (which is what the cve was).
+// For good measure, we also check that fs permissions deny that user from
+// accessing /root.
+func dockerUserNoCaps(c cluster.TestCluster) error {
+	m := c.Machines()[0]
+
+	if err := genDockerContainer(m, "captest", []string{"capsh", "sh", "grep", "cat", "ls"}); err != nil {
+		return err
+	}
+
+	output, err := m.SSH(`docker run --user 1000:1000 \
+		-v /root:/root \
+		captest sh -c \
+		'cat /proc/self/status | grep -E "Cap(Eff|Prm)"; ls /root &>/dev/null && echo "FAIL: could read root" || echo "PASS: err reading root"'`)
+	if err != nil {
+		return fmt.Errorf("could not run container (we weren't even testing for that): %v: %q", err, string(output))
+	}
+
+	outputlines := strings.Split(string(output), "\n")
+	if len(outputlines) < 3 {
+		return fmt.Errorf("expected two lines of caps and an an error/succcess line. Got %q", string(output))
+	}
+	cap1, cap2 := strings.Fields(outputlines[0]), strings.Fields(outputlines[1])
+	// The format of capabilities in /proc/*/status is e.g.: CapPrm:\t0000000000000000
+	// We could parse the hex to its actual capabilities, but since we're looking for none, just checking it's all 0 is good enough.
+	if len(cap1) != 2 || len(cap2) != 2 {
+		return fmt.Errorf("capability lines didn't have two parts: %q", string(output))
+	}
+	if cap1[1] != "0000000000000000" || cap2[1] != "0000000000000000" {
+		return fmt.Errorf("Permitted / effective capabilities were non-zero: %q", string(output))
+	}
+
+	// Finally, check for fail/success on reading /root
+	if !strings.HasPrefix(outputlines[len(outputlines)-1], "PASS: ") {
+		return fmt.Errorf("reading /root test failed: %q", string(output))
 	}
 
 	return nil

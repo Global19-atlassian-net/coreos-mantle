@@ -17,6 +17,7 @@ package sdk
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"strings"
 
@@ -26,7 +27,7 @@ import (
 // pub   2048R/5A50CE28 2015-12-17
 // uid       [ultimate] CoreOS Developer Key <coreos-developer-key@quantum.com>
 // sub   2048R/47B4220F 2015-12-17
-const buildbotPubKey = `
+const buildbot_coreos_PubKey = `
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v2
 
@@ -60,8 +61,10 @@ HznYL5Wa
 -----END PGP PUBLIC KEY BLOCK-----
 `
 
-func Verify(signed, signature io.Reader) error {
-	keyring, err := openpgp.ReadArmoredKeyRing(strings.NewReader(buildbotPubKey))
+func Verify(signed, signature io.Reader, key string) error {
+
+	keyring, err := openpgp.ReadArmoredKeyRing(strings.NewReader(key))
+
 	if err != nil {
 		panic(err)
 	}
@@ -70,7 +73,7 @@ func Verify(signed, signature io.Reader) error {
 	return err
 }
 
-func VerifyFile(file string) error {
+func VerifyFile(file, verifyKeyFile string) error {
 	signed, err := os.Open(file)
 	if err != nil {
 		return err
@@ -83,7 +86,18 @@ func VerifyFile(file string) error {
 	}
 	defer signature.Close()
 
-	if err := Verify(signed, signature); err != nil {
+	var key string
+	if verifyKeyFile == "" {
+		key = buildbot_coreos_PubKey
+	} else {
+		b, err := ioutil.ReadFile(verifyKeyFile)
+		if err != nil {
+			return fmt.Errorf("%v: %s", err, verifyKeyFile)
+		}
+		key = string(b[:])
+	}
+
+	if err := Verify(signed, signature, key); err != nil {
 		return fmt.Errorf("%v: %s", err, file)
 	}
 	return nil
