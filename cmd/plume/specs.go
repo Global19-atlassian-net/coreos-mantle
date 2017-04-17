@@ -57,23 +57,77 @@ type azureSpec struct {
 	SmallIconURI      string
 }
 
+type awsCloudSpec struct {
+	Name              string   // Printable name for the cloud
+	Profile           string   // Authentication profile in ~/.aws
+	Bucket            string   // S3 bucket for uploading image
+	BucketRegion      string   // Region of the bucket
+	LaunchPermissions []string // Other accounts to give launch permission
+	Regions           []string // Regions to create the AMI in
+}
+
+type awsSpec struct {
+	Prefix string         // Prefix for filenames of AMI lists
+	Image  string         // File name of image source
+	Clouds []awsCloudSpec // Clouds
+}
+
 type channelSpec struct {
 	BaseURL      string // Copy from $BaseURL/$Board/$Version
+	Boards       []string
 	Destinations []storageSpec
 	GCE          gceSpec
 	Azure        azureSpec
+	AWS          awsSpec
 }
 
 var (
 	specBoard   string
 	specChannel string
 	specVersion string
-	boards      = []string{"amd64-usr", "arm64-usr"}
 	gceBoards   = []string{"amd64-usr"}
 	azureBoards = []string{"amd64-usr"}
-	specs       = map[string]channelSpec{
+	awsBoards   = []string{"amd64-usr"}
+	awsClouds   = []awsCloudSpec{
+		awsCloudSpec{
+			Name:         "EC2",
+			Profile:      "default",
+			Bucket:       "coreos-prod-ami-import-us-west-2",
+			BucketRegion: "us-west-2",
+			LaunchPermissions: []string{
+				"477645798544",
+			},
+			Regions: []string{
+				"us-east-1",
+				"us-east-2",
+				"us-west-1",
+				"us-west-2",
+				"eu-west-1",
+				"eu-west-2",
+				"eu-central-1",
+				"ap-south-1",
+				"ap-southeast-1",
+				"ap-southeast-2",
+				"ap-northeast-1",
+				"ap-northeast-2",
+				"sa-east-1",
+				"ca-central-1",
+			},
+		},
+		awsCloudSpec{
+			Name:         "GovCloud",
+			Profile:      "govcloud",
+			Bucket:       "coreos-prod-ami-import-us-gov-west-1",
+			BucketRegion: "us-gov-west-1",
+			Regions: []string{
+				"us-gov-west-1",
+			},
+		},
+	}
+	specs = map[string]channelSpec{
 		"alpha": channelSpec{
 			BaseURL: "gs://builds.release.core-os.net/alpha/boards",
+			Boards:  []string{"amd64-usr", "arm64-usr"},
 			Destinations: []storageSpec{storageSpec{
 				BaseURL:     "gs://alpha.release.core-os.net",
 				NamedPath:   "current",
@@ -118,9 +172,15 @@ var (
 				IconURI:           "coreos-globe-color-lg-100px.png",
 				SmallIconURI:      "coreos-globe-color-lg-45px.png",
 			},
+			AWS: awsSpec{
+				Prefix: "coreos_production_ami_",
+				Image:  "coreos_production_ami_vmdk_image.vmdk.bz2",
+				Clouds: awsClouds,
+			},
 		},
 		"beta": channelSpec{
 			BaseURL: "gs://builds.release.core-os.net/beta/boards",
+			Boards:  []string{"amd64-usr", "arm64-usr"},
 			Destinations: []storageSpec{storageSpec{
 				BaseURL:     "gs://beta.release.core-os.net",
 				NamedPath:   "current",
@@ -163,9 +223,15 @@ var (
 				IconURI:           "coreos-globe-color-lg-100px.png",
 				SmallIconURI:      "coreos-globe-color-lg-45px.png",
 			},
+			AWS: awsSpec{
+				Prefix: "coreos_production_ami_",
+				Image:  "coreos_production_ami_vmdk_image.vmdk.bz2",
+				Clouds: awsClouds,
+			},
 		},
 		"stable": channelSpec{
 			BaseURL: "gs://builds.release.core-os.net/stable/boards",
+			Boards:  []string{"amd64-usr"},
 			Destinations: []storageSpec{storageSpec{
 				BaseURL:     "gs://stable.release.core-os.net",
 				NamedPath:   "current",
@@ -197,6 +263,11 @@ var (
 				RecommendedVMSize: "Medium",
 				IconURI:           "coreos-globe-color-lg-100px.png",
 				SmallIconURI:      "coreos-globe-color-lg-45px.png",
+			},
+			AWS: awsSpec{
+				Prefix: "coreos_production_ami_",
+				Image:  "coreos_production_ami_vmdk_image.vmdk.bz2",
+				Clouds: awsClouds,
 			},
 		},
 	}
@@ -231,14 +302,14 @@ func ChannelSpec() channelSpec {
 	}
 
 	boardOk := false
-	for _, board := range boards {
+	for _, board := range spec.Boards {
 		if specBoard == board {
 			boardOk = true
 			break
 		}
 	}
 	if !boardOk {
-		plog.Fatalf("Unknown board: %s", specBoard)
+		plog.Fatalf("Unknown board %q for channel %q", specBoard, specChannel)
 	}
 
 	gceOk := false
@@ -261,6 +332,17 @@ func ChannelSpec() channelSpec {
 	}
 	if !azureOk {
 		spec.Azure = azureSpec{}
+	}
+
+	awsOk := false
+	for _, board := range awsBoards {
+		if specBoard == board {
+			awsOk = true
+			break
+		}
+	}
+	if !awsOk {
+		spec.AWS = awsSpec{}
 	}
 
 	return spec

@@ -15,14 +15,11 @@
 package misc
 
 import (
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/coreos/mantle/kola/cluster"
 	"github.com/coreos/mantle/kola/register"
 	"github.com/coreos/mantle/network/omaha"
-	"github.com/coreos/mantle/platform"
 	"github.com/coreos/mantle/platform/machine/qemu"
 )
 
@@ -51,10 +48,10 @@ func (ps *pingServer) Ping(req *omaha.Request, app *omaha.AppRequest) {
 	ps.ping <- struct{}{}
 }
 
-func OmahaPing(c cluster.TestCluster) error {
+func OmahaPing(c cluster.TestCluster) {
 	qc, ok := c.Cluster.(*qemu.Cluster)
 	if !ok {
-		return errors.New("test only works in qemu")
+		c.Fatal("test only works in qemu")
 	}
 
 	omahaserver := qc.LocalCluster.OmahaServer
@@ -69,17 +66,14 @@ func OmahaPing(c cluster.TestCluster) error {
 
 	out, err := m.SSH("update_engine_client -check_for_update")
 	if err != nil {
-		return fmt.Errorf("failed to execute update_engine_client -check_for_update: %v: %v", out, err)
+		c.Fatalf("failed to execute update_engine_client -check_for_update: %v: %v", out, err)
 	}
 
 	tc := time.After(30 * time.Second)
 
 	select {
 	case <-tc:
-		platform.Manhole(m)
-		return errors.New("timed out waiting for omaha ping")
+		c.Fatal("timed out waiting for omaha ping")
 	case <-svc.ping:
 	}
-
-	return nil
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 CoreOS, Inc.
+// Copyright 2017 CoreOS, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package skip
+package main
 
-// Skip is a sentinel value that can be returned by tests that are skipped
-// rather than passing or failing.
-type Skip string
+func init() {
+	defaults := map[string]string{
+		"something": "something",
+	}
 
-func (s Skip) Error() string {
-	return string(s)
+	Register(Test{
+		Name:     "LogIt",
+		Defaults: defaults,
+		Run: func(x *X) {
+			s := x.Option("something")
+			x.Logf("Got %q", s)
+		},
+	})
+
+	Register(Test{
+		Name:     "SkipIt",
+		Defaults: defaults,
+		Run: func(x *X) {
+			s := x.Option("else")
+			x.Errorf("Got %q", s)
+		},
+	})
 }
